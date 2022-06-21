@@ -85,11 +85,8 @@ impl<T: 'static> From<GlobalRaw<T>> for TransRef<T> {
 
 pub(crate) trait Reference<T: 'static> {
     type Gen: Generation + GenerationCounter + AccessControl;
-    #[inline(always)]
     fn pointer(&self) -> NonNull<T>;
-    #[inline(always)]
     fn validity(&self) -> u32;
-    #[inline(always)]
     fn generation(&self) -> Self::Gen;
 }
 

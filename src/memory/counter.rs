@@ -4,9 +4,7 @@ use std::{
     sync::atomic::{AtomicU32, Ordering::*},
 };
 
-use lock_api::{
-    RawRwLock, RawRwLockDowngrade, RawRwLockRecursive, RawRwLockUpgrade, RawRwLockUpgradeDowngrade,
-};
+use lock_api::{RawRwLock, RawRwLockRecursive, RawRwLockUpgrade};
 use parking_lot::Mutex;
 
 pub(crate) trait Generation: Sized {

@@ -1,10 +1,13 @@
-use std::{ptr::{NonNull}, ops::{Deref, DerefMut}};
+use std::{
+    ops::{Deref, DerefMut},
+    ptr::NonNull,
+};
 
-mod pointers;
 mod counter;
+mod pointers;
 
-use pointers::*;
 use counter::*;
+use pointers::*;
 
 pub struct Strong<T: 'static>(TransRef<T>);
 
@@ -23,7 +26,9 @@ impl<T: 'static> Strong<T> {
         if gen.try_lock_exclusive() {
             gen.bump();
             let res = unsafe { Box::from_raw(self.0.pointer().as_ptr()) };
-            unsafe { gen.unlock_exclusive(); } 
+            unsafe {
+                gen.unlock_exclusive();
+            }
             LocalOrGlobalGeneration::free(gen);
             std::mem::forget(self);
             Ok(res)
@@ -50,28 +55,33 @@ impl<T: 'static> Strong<T> {
 }
 
 #[allow(dead_code)]
-impl<T:Send + Sync + 'static> Strong<T> {
+impl<T: Send + Sync + 'static> Strong<T> {
     pub fn send(self) -> Sending<T> {
         self.make_sharable();
         if let RawRef::Global(res) = self.0 .0.get() {
             std::mem::forget(self);
             Sending(res)
-        } else { panic!() }
+        } else {
+            panic!()
+        }
     }
 }
 
 #[allow(dead_code)]
-impl<T:Sync + 'static> Strong<T> {
+impl<T: Sync + 'static> Strong<T> {
     pub fn make_sharable(&self) -> &Self {
-        self.0 .0.set(match self.0 .0.get() {
-            RawRef::Local(l) => l.globalize(),
-            RawRef::Global(g) => g,
-        }.into());
+        self.0 .0.set(
+            match self.0 .0.get() {
+                RawRef::Local(l) => l.globalize(),
+                RawRef::Global(g) => g,
+            }
+            .into(),
+        );
         self
     }
 }
 
-impl<T:'static> Drop for Strong<T> {
+impl<T: 'static> Drop for Strong<T> {
     fn drop(&mut self) {
         let gen = self.0.generation();
         gen.bump();
@@ -95,12 +105,13 @@ impl<T> From<Box<T>> for Strong<T> {
             LocalRaw {
                 genref: COUNTER_INIT,
                 genptr: LocalGeneration::new(),
-                boxptr: unsafe { NonNull::new_unchecked(Box::into_raw(it)) }
-            }.into()
+                boxptr: unsafe { NonNull::new_unchecked(Box::into_raw(it)) },
+            }
+            .into(),
         )
     }
 }
- 
+
 pub struct Sending<T: 'static>(GlobalRaw<T>);
 unsafe impl<T: 'static + Send + Sync> Send for Sending<T> {}
 
@@ -109,26 +120,31 @@ pub struct Sharing<T: 'static>(GlobalRaw<T>);
 unsafe impl<T: 'static + Sync> Send for Sharing<T> {}
 
 pub struct Weak<T: 'static>(RawRef<T>);
-impl<T:'static> Copy for Weak<T> {}
-impl<T:'static> Clone for Weak<T> {
+impl<T: 'static> Copy for Weak<T> {}
+impl<T: 'static> Clone for Weak<T> {
     fn clone(&self) -> Self {
         *self
     }
 }
 
 #[allow(dead_code)]
-impl<T:'static + Sync> Weak<T> {
+impl<T: 'static + Sync> Weak<T> {
     pub fn share(self) -> Sharing<T> {
         if let RawRef::Global(g) = self.make_sharable().0 {
             Sharing(g)
-        } else { panic!() }
+        } else {
+            panic!()
+        }
     }
 
     pub fn make_sharable(self) -> Self {
-        Weak(match self.0 {
-            RawRef::Local(l) => l.globalize(),
-            RawRef::Global(g) => g,
-        }.into())
+        Weak(
+            match self.0 {
+                RawRef::Local(l) => l.globalize(),
+                RawRef::Global(g) => g,
+            }
+            .into(),
+        )
     }
 }
 
@@ -144,7 +160,7 @@ impl<T> Weak<T> {
         let gen = self.0.generation();
         if self.0.validity() == gen.count() {
             if self.0.generation().try_lock_shared() {
-                return Some(Reading(self.0))
+                return Some(Reading(self.0));
             }
         }
         None
@@ -154,16 +170,16 @@ impl<T> Weak<T> {
         let gen = self.0.generation();
         if self.0.validity() == gen.count() {
             if self.0.generation().try_lock_exclusive() {
-                return Some(Reading(self.0))
+                return Some(Reading(self.0));
             }
         }
         None
     }
 }
 
-pub struct Reading<T:'static>(RawRef<T>);
+pub struct Reading<T: 'static>(RawRef<T>);
 
-impl<T:'static> Deref for Reading<T> {
+impl<T: 'static> Deref for Reading<T> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
@@ -171,19 +187,21 @@ impl<T:'static> Deref for Reading<T> {
     }
 }
 
-impl<T:'static> Clone for Reading<T> {
+impl<T: 'static> Clone for Reading<T> {
     fn clone(&self) -> Self {
-        if !self.0.generation().try_lock_shared() { panic!() }
+        if !self.0.generation().try_lock_shared() {
+            panic!()
+        }
         Self(self.0)
     }
 }
 
-impl<T:'static> Drop for Reading<T> {
+impl<T: 'static> Drop for Reading<T> {
     fn drop(&mut self) {
         let gen = self.0.generation();
         if self.0.validity() != gen.count() {
             if unsafe { gen.try_shared_into_exclusive() } {
-                std::mem::drop(unsafe { Box::from_raw( self.0.pointer().as_ptr()) });
+                std::mem::drop(unsafe { Box::from_raw(self.0.pointer().as_ptr()) });
                 unsafe { gen.unlock_exclusive() }
                 LocalOrGlobalGeneration::free(gen);
                 return;
@@ -193,9 +211,9 @@ impl<T:'static> Drop for Reading<T> {
     }
 }
 
-pub struct Writing<T:'static>(RawRef<T>);
+pub struct Writing<T: 'static>(RawRef<T>);
 
-impl<T:'static> Deref for Writing<T> {
+impl<T: 'static> Deref for Writing<T> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
@@ -203,17 +221,17 @@ impl<T:'static> Deref for Writing<T> {
     }
 }
 
-impl<T:'static> DerefMut for Writing<T> {
+impl<T: 'static> DerefMut for Writing<T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         unsafe { self.0.pointer().as_mut() }
     }
 }
 
-impl<T:'static> Drop for Writing<T> {
+impl<T: 'static> Drop for Writing<T> {
     fn drop(&mut self) {
         let gen = self.0.generation();
         if self.0.validity() != gen.count() {
-            std::mem::drop(unsafe { Box::from_raw( self.0.pointer().as_ptr()) });
+            std::mem::drop(unsafe { Box::from_raw(self.0.pointer().as_ptr()) });
             unsafe { gen.unlock_exclusive() }
             LocalOrGlobalGeneration::free(gen);
         } else {
