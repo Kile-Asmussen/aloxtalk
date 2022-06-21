@@ -3,6 +3,7 @@
 
 
 mod memory;
+mod pipe;
 
 fn main() {
     println!("Hello, world!");
