@@ -5,6 +5,7 @@ use std::{
 
 mod counter;
 mod pointers;
+mod tests;
 
 use counter::*;
 use pointers::*;

@@ -1,7 +1,9 @@
 use std::{
+    borrow::Borrow,
     cell::{Cell, RefCell},
+    ops,
     ptr::NonNull,
-    sync::atomic::{AtomicU32, Ordering::*},
+    sync::atomic::{AtomicU32, AtomicUsize, Ordering::*},
 };
 
 use lock_api::{RawRwLock, RawRwLockRecursive, RawRwLockUpgrade};
@@ -28,8 +30,9 @@ impl LocalGeneration {
         let mut next = Self::NEXT_FRESH.with(Cell::get);
 
         if next == fresh.len() {
-            Self::LEAKED_COUNTERS.with_borrow_mut(|v| v.push(fresh));
+            Self::LEAKED_COUNTER_SLICES.with_borrow_mut(|v| v.push(fresh));
             fresh = (0..next + next / 2).map(|_| LocalCounter::new()).collect();
+            Self::ALLOCATED_COUNTERS.with(|c| c.set(c.get() + next + next / 2));
             next = 0;
         }
 
@@ -37,7 +40,6 @@ impl LocalGeneration {
         next += 1;
         Self::FRESH_LIST.with(|c| c.set(fresh));
         Self::NEXT_FRESH.with(|c| c.set(next));
-
         res
     }
 
@@ -49,7 +51,18 @@ impl LocalGeneration {
         static FREE_LIST : RefCell<Vec<LocalGeneration>> = RefCell::new(Vec::new());
         static NEXT_FRESH : Cell<usize> = Cell::new(0);
         static FRESH_LIST : Cell<Box<[LocalCounter]>> = Cell::new((0..32).map(|_| LocalCounter::new()).collect());
-        static LEAKED_COUNTERS : RefCell<Vec<Box<[LocalCounter]>>> = RefCell::new(Vec::new());
+        static ALLOCATED_COUNTERS : Cell<usize> = Cell::new(0);
+        static LEAKED_COUNTER_SLICES : RefCell<Vec<Box<[LocalCounter]>>> = RefCell::new(Vec::new());
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn allocations() -> usize {
+        Self::ALLOCATED_COUNTERS.with(Cell::get)
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn free_list_size() -> usize {
+        Self::FREE_LIST.with_borrow(Vec::len)
     }
 
     #[inline(always)]
@@ -89,6 +102,7 @@ impl GlobalGeneration {
                 .collect::<Vec<GlobalCounter>>()
                 .leak();
 
+            ALLOCATED_COUNTERS.fetch_add(fresh.0, Relaxed);
             fresh.0 += fresh.0 / 2;
         }
 
@@ -111,6 +125,23 @@ impl GlobalGeneration {
         this
     }
 
+    #[allow(dead_code)]
+    pub(crate) fn allocations() -> usize {
+        ALLOCATED_COUNTERS.load(Relaxed)
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn free_list_size() -> usize {
+        FREE_LIST.lock().len()
+    }
+
+    pub(crate) fn leak_all_and_reset() {
+        let mut x = FREE_LIST.lock();
+        let mut y = FRESH_LIST.lock();
+        *x = Vec::new();
+        *y = (32, &[]);
+    }
+
     #[inline(always)]
     fn delegate<R>(&self, f: fn(&GlobalCounter) -> R) -> R {
         f(self.0)
@@ -120,6 +151,12 @@ impl GlobalGeneration {
     unsafe fn unsafe_delegate<R>(&self, f: unsafe fn(&GlobalCounter) -> R) -> R {
         f(self.0)
     }
+}
+
+lazy_static::lazy_static! {
+    static ref FREE_LIST : Mutex<Vec<GlobalGeneration>> = Mutex::new(Vec::new());
+    static ref FRESH_LIST : Mutex<(usize, &'static [GlobalCounter])> = Mutex::new((32, &[]));
+    static ref ALLOCATED_COUNTERS : AtomicUsize = AtomicUsize::new(0);
 }
 
 impl Generation for GlobalGeneration {
@@ -166,11 +203,6 @@ impl Generation for LocalOrGlobalGeneration {
             |g| GlobalGeneration::free(*g),
         )
     }
-}
-
-lazy_static::lazy_static! {
-    static ref FREE_LIST : Mutex<Vec<GlobalGeneration>> = Mutex::new(Vec::new());
-    static ref FRESH_LIST : Mutex<(usize, &'static [GlobalCounter])> = Mutex::new((32, &[]));
 }
 
 pub(crate) struct LocalCounter(pub(crate) Cell<LocalOrGlobalCounter>);
@@ -350,19 +382,7 @@ pub(crate) trait AccessControl {
     unsafe fn unlock_upgradable(&self);
     unsafe fn unlock_exclusive(&self);
 
-    unsafe fn try_shared_into_exclusive(&self) -> bool {
-        if self.try_lock_upgradable() {
-            self.unlock_shared();
-            if self.try_upgrade() {
-                return true;
-            }
-            if !self.try_lock_shared() {
-                panic!()
-            }
-            self.unlock_upgradable();
-        }
-        false
-    }
+    unsafe fn try_shared_into_exclusive(&self) -> bool;
 }
 
 pub(crate) trait GenerationCounter {
@@ -387,7 +407,7 @@ impl GenerationCounter for RawLocalCounter {
 impl AccessControl for RawLocalCounter {
     fn try_lock_shared(&self) -> bool {
         if self.access.get() >= 0 {
-            self.access.set(self.access.get() + 1);
+            self.access.set(self.access.get() + 2);
             true
         } else {
             false
@@ -404,7 +424,12 @@ impl AccessControl for RawLocalCounter {
     }
 
     fn try_lock_upgradable(&self) -> bool {
-        self.try_lock_shared()
+        if self.access.get() & 1 == 0 {
+            self.access.set(self.access.get() | 1);
+            true
+        } else {
+            false
+        }
     }
 
     // unsafe fn downgrade(&self) {
@@ -428,8 +453,7 @@ impl AccessControl for RawLocalCounter {
     }
 
     unsafe fn unlock_shared(&self) {
-        let n = self.access.get();
-        self.access.set(n - 1);
+        self.access.set(self.access.get() - 2);
     }
 
     unsafe fn unlock_exclusive(&self) {
@@ -437,11 +461,16 @@ impl AccessControl for RawLocalCounter {
     }
 
     unsafe fn unlock_upgradable(&self) {
-        self.unlock_shared()
+        self.access.set(self.access.get() & !1);
     }
 
     unsafe fn try_shared_into_exclusive(&self) -> bool {
-        self.try_upgrade()
+        if self.access.get() == 2 {
+            self.access.set(-1);
+            true
+        } else {
+            false
+        }
     }
 }
 
@@ -484,10 +513,10 @@ impl GenerationCounter for GlobalCounter {
 }
 
 impl AccessControl for GlobalCounter {
-    fn try_lock_shared(&self) -> bool {
-        self.access.try_lock_shared_recursive()
-    }
-
+    // fn try_lock_shared(&self) -> bool {
+    //     self.access.try_lock_shared_recursive()
+    // }
+    delegate!(fn try_lock_shared -> bool, parking_lot::RawRwLock);
     delegate!(fn try_lock_exclusive -> bool, parking_lot::RawRwLock);
     delegate!(fn try_lock_upgradable -> bool, parking_lot::RawRwLock);
     //delegate!(unsafe fn downgrade -> (), parking_lot::RawRwLock);
@@ -497,6 +526,20 @@ impl AccessControl for GlobalCounter {
     delegate!(unsafe fn unlock_shared -> (), parking_lot::RawRwLock);
     delegate!(unsafe fn unlock_upgradable -> (), parking_lot::RawRwLock);
     delegate!(unsafe fn unlock_exclusive -> (), parking_lot::RawRwLock);
+
+    unsafe fn try_shared_into_exclusive(&self) -> bool {
+        if self.access.try_lock_upgradable() {
+            self.access.unlock_shared();
+            if self.access.try_upgrade() {
+                return true;
+            }
+            if !self.access.try_lock_shared() {
+                panic!()
+            }
+            self.access.unlock_upgradable();
+        }
+        false
+    }
 }
 
 macro_rules! delegate_all {
@@ -505,6 +548,7 @@ macro_rules! delegate_all {
             delegate!(fn bump -> (), $($sub),+);
             delegate!(fn count -> u32, $($sub),+);
         }
+
         impl AccessControl for $it {
             delegate!(fn try_lock_shared -> bool, $($sub),+);
             delegate!(fn try_lock_exclusive -> bool, $($sub),+);
@@ -516,6 +560,7 @@ macro_rules! delegate_all {
             delegate!(unsafe fn unlock_shared -> (), $($sub),+);
             delegate!(unsafe fn unlock_exclusive -> (), $($sub),+);
             delegate!(unsafe fn unlock_upgradable -> (), $($sub),+);
+            delegate!(unsafe fn try_shared_into_exclusive -> bool, $($sub),+);
         }
     };
 }
