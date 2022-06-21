@@ -6,25 +6,19 @@ mod counter;
 use pointers::*;
 use counter::*;
 
-
 pub struct Strong<T: 'static>(TransRef<T>);
 
+#[allow(dead_code)]
 impl<T: 'static> Strong<T> {
     pub fn new(it: T) -> Self {
-        Self(
-            LocalRaw {
-                genref: COUNTER_INIT,
-                genptr: LocalGeneration::new(),
-                boxptr: unsafe { NonNull::new_unchecked(Box::into_raw(Box::new(it))) }
-            }.into()
-        )
+        Self::from(Box::new(it))
     }
 
     pub fn alias(&self) -> Weak<T> {
         Weak(self.0 .0.get())
     }
 
-    pub fn take(self) -> Result<Box<T>, Self> {
+    pub fn try_take(self) -> Result<Box<T>, Self> {
         let gen = self.0.generation();
         if gen.try_lock_exclusive() {
             gen.bump();
@@ -55,14 +49,25 @@ impl<T: 'static> Strong<T> {
     }
 }
 
+#[allow(dead_code)]
 impl<T:Send + Sync + 'static> Strong<T> {
     pub fn send(self) -> Sending<T> {
-        let res = match self.0 .0.get() {
-            RawRef::Local(l) => Sending(l.globalize()),
-            RawRef::Global(g) => Sending(g),
-        };
-        std::mem::forget(self);
-        res
+        self.make_sharable();
+        if let RawRef::Global(res) = self.0 .0.get() {
+            std::mem::forget(self);
+            Sending(res)
+        } else { panic!() }
+    }
+}
+
+#[allow(dead_code)]
+impl<T:Sync + 'static> Strong<T> {
+    pub fn make_sharable(&self) -> &Self {
+        self.0 .0.set(match self.0 .0.get() {
+            RawRef::Local(l) => l.globalize(),
+            RawRef::Global(g) => g,
+        }.into());
+        self
     }
 }
 
@@ -83,6 +88,18 @@ impl<T> From<Sending<T>> for Strong<T> {
         Strong(it.0.into())
     }
 }
+
+impl<T> From<Box<T>> for Strong<T> {
+    fn from(it: Box<T>) -> Self {
+        Self(
+            LocalRaw {
+                genref: COUNTER_INIT,
+                genptr: LocalGeneration::new(),
+                boxptr: unsafe { NonNull::new_unchecked(Box::into_raw(it)) }
+            }.into()
+        )
+    }
+}
  
 pub struct Sending<T: 'static>(GlobalRaw<T>);
 unsafe impl<T: 'static + Send + Sync> Send for Sending<T> {}
@@ -99,12 +116,19 @@ impl<T:'static> Clone for Weak<T> {
     }
 }
 
+#[allow(dead_code)]
 impl<T:'static + Sync> Weak<T> {
     pub fn share(self) -> Sharing<T> {
-        Sharing(match self.0 {
+        if let RawRef::Global(g) = self.make_sharable().0 {
+            Sharing(g)
+        } else { panic!() }
+    }
+
+    pub fn make_sharable(self) -> Self {
+        Weak(match self.0 {
             RawRef::Local(l) => l.globalize(),
             RawRef::Global(g) => g,
-        })
+        }.into())
     }
 }
 
@@ -114,6 +138,7 @@ impl<T> From<Sharing<T>> for Weak<T> {
     }
 }
 
+#[allow(dead_code)]
 impl<T> Weak<T> {
     fn try_read(&self) -> Option<Reading<T>> {
         let gen = self.0.generation();

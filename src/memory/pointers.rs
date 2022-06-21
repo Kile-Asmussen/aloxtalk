@@ -1,17 +1,16 @@
-use std::{
-    cell::Cell,
-    ptr::NonNull,
-};
+use std::{cell::Cell, ptr::NonNull};
 
 use super::counter::*;
 
-macro_rules!clone_copy{
+macro_rules! clone_copy {
     ($t:ident) => {
-        impl<T:'static> Copy for $t<T> {}
-        impl<T:'static> Clone for $t<T> {
-            fn clone(&self) -> Self { *self }
+        impl<T: 'static> Copy for $t<T> {}
+        impl<T: 'static> Clone for $t<T> {
+            fn clone(&self) -> Self {
+                *self
+            }
         }
-    }
+    };
 }
 
 pub(crate) struct LocalRaw<T: 'static> {
@@ -21,11 +20,19 @@ pub(crate) struct LocalRaw<T: 'static> {
 }
 clone_copy!(LocalRaw);
 
-impl<T:'static> LocalRaw<T> {
+impl<T: 'static> LocalRaw<T> {
     pub(crate) fn globalize(&self) -> GlobalRaw<T> {
-        let LocalRaw { genref, genptr, boxptr } = *self;
+        let LocalRaw {
+            genref,
+            genptr,
+            boxptr,
+        } = *self;
         let genptr = genptr.globalize();
-        GlobalRaw { genref, genptr, boxptr }
+        GlobalRaw {
+            genref,
+            genptr,
+            boxptr,
+        }
     }
 }
 
@@ -42,12 +49,12 @@ pub(crate) enum RawRef<T: 'static> {
 }
 clone_copy!(RawRef);
 
-impl<T:'static> From<LocalRaw<T>> for RawRef<T> {
+impl<T: 'static> From<LocalRaw<T>> for RawRef<T> {
     fn from(it: LocalRaw<T>) -> Self {
         Self::Local(it)
     }
 }
-impl<T:'static> From<GlobalRaw<T>> for RawRef<T> {
+impl<T: 'static> From<GlobalRaw<T>> for RawRef<T> {
     fn from(it: GlobalRaw<T>) -> Self {
         Self::Global(it)
     }
@@ -60,45 +67,69 @@ impl<T: 'static> Clone for TransRef<T> {
     }
 }
 
-impl<T:'static> TransRef<T> {
-    fn new(it: RawRef<T>) -> Self { Self(Cell::new(it)) }
+impl<T: 'static> TransRef<T> {
+    fn new(it: RawRef<T>) -> Self {
+        Self(Cell::new(it))
+    }
 }
-impl<T:'static> From<LocalRaw<T>> for TransRef<T> {
+impl<T: 'static> From<LocalRaw<T>> for TransRef<T> {
     fn from(it: LocalRaw<T>) -> Self {
         Self::new(it.into())
     }
 }
-impl<T:'static> From<GlobalRaw<T>> for TransRef<T> {
+impl<T: 'static> From<GlobalRaw<T>> for TransRef<T> {
     fn from(it: GlobalRaw<T>) -> Self {
         Self::new(it.into())
     }
 }
 
-pub(crate) trait Reference<T:'static> {
-    type Gen : Generation + GenerationCounter + AccessControl;
+pub(crate) trait Reference<T: 'static> {
+    type Gen: Generation + GenerationCounter + AccessControl;
+    #[inline(always)]
     fn pointer(&self) -> NonNull<T>;
+    #[inline(always)]
     fn validity(&self) -> u32;
+    #[inline(always)]
     fn generation(&self) -> Self::Gen;
 }
 
-impl<T:'static> Reference<T> for LocalRaw<T> {
+impl<T: 'static> Reference<T> for LocalRaw<T> {
     type Gen = LocalGeneration;
-    
-    fn pointer(&self) -> NonNull<T> { self.boxptr }
-    fn validity(&self) -> u32 { self.genref }
-    fn generation(&self) -> Self::Gen { self.genptr }
+
+    #[inline(always)]
+    fn pointer(&self) -> NonNull<T> {
+        self.boxptr
+    }
+    #[inline(always)]
+    fn validity(&self) -> u32 {
+        self.genref
+    }
+    #[inline(always)]
+    fn generation(&self) -> Self::Gen {
+        self.genptr
+    }
 }
 
-impl<T:'static> Reference<T> for GlobalRaw<T> {
+impl<T: 'static> Reference<T> for GlobalRaw<T> {
     type Gen = GlobalGeneration;
-    fn pointer(&self) -> NonNull<T> { self.boxptr }
-    fn validity(&self) -> u32 { self.genref }
-    fn generation(&self) -> Self::Gen { self.genptr }
+    #[inline(always)]
+    fn pointer(&self) -> NonNull<T> {
+        self.boxptr
+    }
+    #[inline(always)]
+    fn validity(&self) -> u32 {
+        self.genref
+    }
+    #[inline(always)]
+    fn generation(&self) -> Self::Gen {
+        self.genptr
+    }
 }
 
-impl<T:'static> Reference<T> for RawRef<T> {
+impl<T: 'static> Reference<T> for RawRef<T> {
     type Gen = LocalOrGlobalGeneration;
 
+    #[inline(always)]
     fn pointer(&self) -> NonNull<T> {
         match self {
             RawRef::Local(l) => l.pointer(),
@@ -106,6 +137,7 @@ impl<T:'static> Reference<T> for RawRef<T> {
         }
     }
 
+    #[inline(always)]
     fn validity(&self) -> u32 {
         match self {
             RawRef::Local(l) => l.validity(),
@@ -113,6 +145,7 @@ impl<T:'static> Reference<T> for RawRef<T> {
         }
     }
 
+    #[inline(always)]
     fn generation(&self) -> Self::Gen {
         match self {
             RawRef::Local(l) => Self::Gen::Local(l.generation()),
@@ -121,9 +154,18 @@ impl<T:'static> Reference<T> for RawRef<T> {
     }
 }
 
-impl<T:'static> Reference<T> for TransRef<T> {
+impl<T: 'static> Reference<T> for TransRef<T> {
     type Gen = LocalOrGlobalGeneration;
-    fn pointer(&self) -> NonNull<T> { self.0.get().pointer() }
-    fn validity(&self) -> u32 { self.0.get().validity() }
-    fn generation(&self) -> Self::Gen { self.0.get().generation() }
+    #[inline(always)]
+    fn pointer(&self) -> NonNull<T> {
+        self.0.get().pointer()
+    }
+    #[inline(always)]
+    fn validity(&self) -> u32 {
+        self.0.get().validity()
+    }
+    #[inline(always)]
+    fn generation(&self) -> Self::Gen {
+        self.0.get().generation()
+    }
 }
