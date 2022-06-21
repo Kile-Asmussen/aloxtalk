@@ -6,7 +6,7 @@ use std::{
     sync::atomic::{AtomicU32, AtomicUsize, Ordering::*},
 };
 
-use lock_api::{RawRwLock, RawRwLockRecursive, RawRwLockUpgrade};
+use lock_api::{RawRwLock, RawRwLockDowngrade, RawRwLockUpgrade};
 use parking_lot::Mutex;
 
 pub(crate) trait Generation: Sized {
@@ -374,7 +374,7 @@ pub(crate) trait AccessControl {
     fn try_lock_exclusive(&self) -> bool;
     fn try_lock_upgradable(&self) -> bool;
 
-    //unsafe fn downgrade(&self);
+    unsafe fn downgrade(&self);
     //unsafe fn downgrade_to_upgradable(&self);
     //unsafe fn downgrade_upgradable(&self);
     unsafe fn try_upgrade(&self) -> bool;
@@ -432,12 +432,9 @@ impl AccessControl for RawLocalCounter {
         }
     }
 
-    // unsafe fn downgrade(&self) {
-    //     match self.access.get() {
-    //         -1 => self.access.set(1),
-    //         _ => panic!(),
-    //     }
-    // }
+    unsafe fn downgrade(&self) {
+        self.access.set(2);
+    }
 
     // unsafe fn downgrade_to_upgradable(&self) {}
 
@@ -519,7 +516,7 @@ impl AccessControl for GlobalCounter {
     delegate!(fn try_lock_shared -> bool, parking_lot::RawRwLock);
     delegate!(fn try_lock_exclusive -> bool, parking_lot::RawRwLock);
     delegate!(fn try_lock_upgradable -> bool, parking_lot::RawRwLock);
-    //delegate!(unsafe fn downgrade -> (), parking_lot::RawRwLock);
+    delegate!(unsafe fn downgrade -> (), parking_lot::RawRwLock);
     //delegate!(unsafe fn downgrade_upgradable -> (), parking_lot::RawRwLock);
     //delegate!(unsafe fn downgrade_to_upgradable -> (), parking_lot::RawRwLock);
     delegate!(unsafe fn try_upgrade -> bool, parking_lot::RawRwLock);
@@ -553,7 +550,7 @@ macro_rules! delegate_all {
             delegate!(fn try_lock_shared -> bool, $($sub),+);
             delegate!(fn try_lock_exclusive -> bool, $($sub),+);
             delegate!(fn try_lock_upgradable -> bool, $($sub),+);
-            //delegate!(unsafe fn downgrade -> (), $($sub),+);
+            delegate!(unsafe fn downgrade -> (), $($sub),+);
             //delegate!(unsafe fn downgrade_upgradable -> (), $($sub),+);
             //delegate!(unsafe fn downgrade_to_upgradable -> (), $($sub),+);
             delegate!(unsafe fn try_upgrade -> bool, $($sub),+);

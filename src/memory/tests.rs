@@ -1,4 +1,7 @@
 #[cfg(test)]
+use std::mem;
+
+#[cfg(test)]
 use std::{assert_matches::assert_matches, thread};
 
 #[cfg(test)]
@@ -6,6 +9,9 @@ use parking_lot::Mutex;
 
 #[cfg(test)]
 use crate::memory::counter::*;
+
+#[cfg(test)]
+use super::Strong;
 
 #[test]
 fn local_allocation_single() {
@@ -120,6 +126,8 @@ fn local_locking() {
         assert!(!x.try_lock_exclusive());
         x.unlock_exclusive();
 
+        assert!(x.try_lock_exclusive());
+        x.downgrade();
         assert!(x.try_lock_shared());
         x.unlock_shared();
     }
@@ -148,6 +156,8 @@ fn global_locking() {
         assert!(!x.try_lock_exclusive());
         x.unlock_exclusive();
 
+        assert!(x.try_lock_exclusive());
+        x.downgrade();
         assert!(x.try_lock_shared());
         x.unlock_shared();
     }
@@ -156,37 +166,35 @@ fn global_locking() {
 
 #[test]
 fn lock_state_transfers() {
-    unsafe {
-        let _lock = GLOBAL_TEST.lock();
+    let _lock = GLOBAL_TEST.lock();
 
-        let l = LocalGeneration::new();
+    let l = LocalGeneration::new();
 
-        l.try_lock_shared();
+    l.try_lock_shared();
 
-        let g = l.globalize();
+    let g = l.globalize();
 
-        assert!(!g.try_lock_exclusive());
-        assert!(g.try_lock_upgradable());
-        assert!(g.try_lock_shared());
+    assert!(!g.try_lock_exclusive());
+    assert!(g.try_lock_upgradable());
+    assert!(g.try_lock_shared());
 
-        let l = LocalGeneration::new();
-        l.try_lock_upgradable();
-        let g = l.globalize();
+    let l = LocalGeneration::new();
+    l.try_lock_upgradable();
+    let g = l.globalize();
 
-        assert!(!g.try_lock_exclusive());
-        assert!(!g.try_lock_upgradable());
-        assert!(g.try_lock_shared());
+    assert!(!g.try_lock_exclusive());
+    assert!(!g.try_lock_upgradable());
+    assert!(g.try_lock_shared());
 
-        let l = LocalGeneration::new();
-        l.try_lock_exclusive();
-        let g = l.globalize();
+    let l = LocalGeneration::new();
+    l.try_lock_exclusive();
+    let g = l.globalize();
 
-        assert!(!g.try_lock_exclusive());
-        assert!(!g.try_lock_upgradable());
-        assert!(!g.try_lock_shared());
+    assert!(!g.try_lock_exclusive());
+    assert!(!g.try_lock_upgradable());
+    assert!(!g.try_lock_shared());
 
-        GlobalGeneration::leak_all_and_reset();
-    }
+    GlobalGeneration::leak_all_and_reset();
 }
 
 #[test]
@@ -230,5 +238,126 @@ fn globalized_local_redirects() {
     assert!(!g.try_lock_upgradable());
     assert!(!g.try_lock_exclusive());
 
+    let l = LocalGeneration::new();
+    let g = l.globalize();
+
+    l.try_lock_exclusive();
+    assert!(!g.try_lock_shared());
+    assert!(!g.try_lock_upgradable());
+    assert!(!g.try_lock_exclusive());
+
     GlobalGeneration::leak_all_and_reset();
+}
+
+#[test]
+fn strong_reading() {
+    let s = Strong::new(1u32);
+
+    let p = s.try_read().unwrap();
+
+    let q = s.try_read().unwrap();
+
+    assert_eq!(*p, *q);
+
+    assert!(s.try_write().is_none());
+}
+
+#[test]
+fn strong_writing() {
+    let s = Strong::new(1u32);
+
+    let mut p = s.try_write().unwrap();
+
+    assert_eq!(*p, 1);
+
+    assert!(s.try_read().is_none());
+
+    *p = 2;
+
+    mem::drop(p);
+
+    let q = s.try_read().unwrap();
+
+    assert_eq!(*q, 2);
+}
+
+#[test]
+fn weak_reading() {
+    let _s = Strong::new(1u32);
+    let s = _s.alias();
+
+    let p = s.try_read().unwrap();
+
+    let q = s.try_read().unwrap();
+
+    assert_eq!(*p, *q);
+
+    assert!(s.try_write().is_none());
+}
+
+#[test]
+fn weak_writing() {
+    let _s = Strong::new(1u32);
+    let s = _s.alias();
+
+    let mut p = s.try_write().unwrap();
+
+    assert_eq!(*p, 1);
+
+    assert!(s.try_read().is_none());
+
+    *p = 2;
+
+    mem::drop(p);
+
+    let q = s.try_read().unwrap();
+
+    assert_eq!(*q, 2);
+}
+
+#[test]
+fn shared_access() {
+    let s = Strong::new(1);
+    let w = s.alias();
+
+    let p = s.try_read().unwrap();
+    let q = w.try_read().unwrap();
+
+    assert_eq!(*p, *q);
+}
+
+#[test]
+fn exclusive_access() {
+    let s = Strong::new(1);
+    let w = s.alias();
+
+    {
+        let _p = s.try_read().unwrap();
+        let _q = w.try_read().unwrap();
+    }
+
+    {
+        let _p = s.try_read().unwrap();
+        let _q = w.try_read().unwrap();
+    }
+
+    {
+        let _p = s.try_write().unwrap();
+        assert!(w.try_read().is_none());
+    }
+
+    {
+        let _p = w.try_write().unwrap();
+        assert!(s.try_read().is_none());
+    }
+
+    {
+        let _p = s.try_read().unwrap();
+        assert!(w.try_write().is_none());
+    }
+
+    {
+        let _p = w.try_read().unwrap();
+        assert!(s.try_write().is_none());
+    }
 }

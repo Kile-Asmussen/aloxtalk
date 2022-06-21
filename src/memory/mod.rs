@@ -46,9 +46,9 @@ impl<T: 'static> Strong<T> {
         }
     }
 
-    fn try_write(&self) -> Option<Reading<T>> {
+    fn try_write(&self) -> Option<Writing<T>> {
         if self.0.generation().try_lock_exclusive() {
-            Some(Reading(self.0 .0.get()))
+            Some(Writing(self.0 .0.get()))
         } else {
             None
         }
@@ -113,6 +113,7 @@ impl<T> From<Box<T>> for Strong<T> {
     }
 }
 
+#[repr(transparent)]
 pub struct Sending<T: 'static>(GlobalRaw<T>);
 unsafe impl<T: 'static + Send + Sync> Send for Sending<T> {}
 
@@ -167,11 +168,11 @@ impl<T> Weak<T> {
         None
     }
 
-    fn try_write(&self) -> Option<Reading<T>> {
+    fn try_write(&self) -> Option<Writing<T>> {
         let gen = self.0.generation();
         if self.0.validity() == gen.count() {
             if self.0.generation().try_lock_exclusive() {
-                return Some(Reading(self.0));
+                return Some(Writing(self.0));
             }
         }
         None
