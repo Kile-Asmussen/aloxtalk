@@ -1,7 +1,5 @@
 use std::{
-    borrow::Borrow,
     cell::{Cell, RefCell},
-    ops,
     ptr::NonNull,
     sync::atomic::{AtomicU32, AtomicUsize, Ordering::*},
 };
@@ -13,6 +11,7 @@ pub(crate) trait Generation: Sized {
     fn free(this: Self);
 }
 
+#[repr(transparent)]
 #[derive(Clone, Copy)]
 pub(crate) struct LocalGeneration(pub(crate) NonNull<LocalCounter>);
 
@@ -84,6 +83,7 @@ impl Generation for LocalGeneration {
     }
 }
 
+#[repr(transparent)]
 #[derive(Clone, Copy)]
 pub(crate) struct GlobalGeneration(pub(crate) &'static GlobalCounter);
 
